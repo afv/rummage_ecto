@@ -159,9 +159,21 @@ defmodule Rummage.Ecto do
       paginate: Keyword.get(opts, :paginate, RConfig.paginate())
     ]
 
-    rummage = Enum.reduce(hooks, rummage, &format_hook_params(&1, &2, queryable, opts))
+    Enum.reduce(hooks, {queryable, rummage}, fn
+      {_, nil}, {q, r} ->
+        {q, r}
 
-    {Enum.reduce(hooks, queryable, &run_hook(&1, &2, rummage)), rummage}
+      {type, hook_mod}, {q, r} ->
+        case Map.get(r, type) do
+          nil ->
+            {q, r}
+
+          params ->
+            formatted = apply(hook_mod, :format_params, [q, params, opts])
+            q2 = apply(hook_mod, :run, [q, formatted])
+            {q2, Map.put(r, type, formatted)}
+        end
+    end)
   end
 
   defp format_hook_params({_, nil}, rummage, _, _), do: rummage
