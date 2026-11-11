@@ -274,120 +274,66 @@ defmodule Rummage.Ecto.Services.BuildSearchQuery do
   @spec handle_like(Ecto.Query.t(), atom() | tuple(), String.t(), __MODULE__.search_expr()) ::
           Ecto.Query.t()
   for fragment <- @supported_fragments_one do
-    def handle_like(queryable, {:fragment, unquote(fragment), field}, search_term, :where) do
-      queryable
-      |> where(
-        [..., b],
-        like(
-          fragment(unquote(fragment), field(b, ^field)),
-          ^"%#{String.replace(search_term, "%", "\\%")}%"
-        )
-      )
-    end
+    defp like_word_condition({:fragment, unquote(fragment), field}, pattern),
+      do: dynamic([..., b], like(fragment(unquote(fragment), field(b, ^field)), ^pattern))
+
+    defp ilike_word_condition({:fragment, unquote(fragment), field}, pattern),
+      do: dynamic([..., b], ilike(fragment(unquote(fragment), field(b, ^field)), ^pattern))
   end
 
   for fragment <- @supported_fragments_two do
-    def handle_like(
-          queryable,
-          {:fragment, unquote(fragment), field1, field2},
-          search_term,
-          :where
-        ) do
-      queryable
-      |> where(
-        [..., b],
-        like(
-          fragment(unquote(fragment), field(b, ^field1), field(b, ^field2)),
-          ^"%#{String.replace(search_term, "%", "\\%")}%"
+    defp like_word_condition({:fragment, unquote(fragment), field1, field2}, pattern),
+      do:
+        dynamic(
+          [..., b],
+          like(fragment(unquote(fragment), field(b, ^field1), field(b, ^field2)), ^pattern)
         )
-      )
+
+    defp ilike_word_condition({:fragment, unquote(fragment), field1, field2}, pattern),
+      do:
+        dynamic(
+          [..., b],
+          ilike(fragment(unquote(fragment), field(b, ^field1), field(b, ^field2)), ^pattern)
+        )
+  end
+
+  defp like_word_condition(field, pattern),
+    do: dynamic([..., b], like(field(b, ^field), ^pattern))
+
+  defp ilike_word_condition(field, pattern),
+    do: dynamic([..., b], ilike(field(b, ^field), ^pattern))
+
+  @doc false
+  # The search term split on whitespace into one `%word%` pattern per word, with `\`, `%` and `_`
+  # escaped so they match literally. A term with no words (empty or only whitespace)
+  # keeps the single pattern it always had.
+  def word_patterns(search_term) when is_binary(search_term) do
+    case String.split(search_term) do
+      [] -> ["%" <> escape_like(search_term) <> "%"]
+      words -> Enum.map(words, &("%" <> escape_like(&1) <> "%"))
     end
   end
 
-  def handle_like(queryable, field, search_term, :where) do
-    queryable
-    |> where(
-      [..., b],
-      like(field(b, ^field), ^"%#{String.replace(search_term, "%", "\\%")}%")
-    )
+  defp escape_like(word),
+    do: String.replace(word, ["\\", "%", "_"], fn special -> "\\" <> special end)
+
+  # Every word must match, in any order.
+  defp all_words_condition(condition_fun, field, search_term) do
+    search_term
+    |> word_patterns()
+    |> Enum.map(&condition_fun.(field, &1))
+    |> Enum.reduce(fn condition, acc -> dynamic(^acc and ^condition) end)
   end
 
-  for fragment <- @supported_fragments_one do
-    def handle_like(queryable, {:fragment, unquote(fragment), field}, search_term, :or_where) do
-      queryable
-      |> or_where(
-        [..., b],
-        like(
-          fragment(unquote(fragment), field(b, ^field)),
-          ^"%#{String.replace(search_term, "%", "\\%")}%"
-        )
-      )
-    end
-  end
+  def handle_like(queryable, field, search_term, :where) when is_binary(search_term),
+    do: where(queryable, ^all_words_condition(&like_word_condition/2, field, search_term))
 
-  for fragment <- @supported_fragments_two do
-    def handle_like(
-          queryable,
-          {:fragment, unquote(fragment), field1, field2},
-          search_term,
-          :or_where
-        ) do
-      queryable
-      |> or_where(
-        [..., b],
-        like(
-          fragment(unquote(fragment), field(b, ^field1), field(b, ^field2)),
-          ^"%#{String.replace(search_term, "%", "\\%")}%"
-        )
-      )
-    end
-  end
+  def handle_like(queryable, field, search_term, :or_where) when is_binary(search_term),
+    do: or_where(queryable, ^all_words_condition(&like_word_condition/2, field, search_term))
 
-  def handle_like(queryable, field, search_term, :or_where) do
-    queryable
-    |> or_where(
-      [..., b],
-      like(field(b, ^field), ^"%#{String.replace(search_term, "%", "\\%")}%")
-    )
-  end
-
-  for fragment <- @supported_fragments_one do
-    def handle_like(queryable, {:fragment, unquote(fragment), field}, search_term, :not_where) do
-      queryable
-      |> where(
-        [..., b],
-        not like(
-          fragment(unquote(fragment), field(b, ^field)),
-          ^"%#{String.replace(search_term, "%", "\\%")}%"
-        )
-      )
-    end
-  end
-
-  for fragment <- @supported_fragments_two do
-    def handle_like(
-          queryable,
-          {:fragment, unquote(fragment), field1, field2},
-          search_term,
-          :not_where
-        ) do
-      queryable
-      |> where(
-        [..., b],
-        not like(
-          fragment(unquote(fragment), field(b, ^field1), field(b, ^field2)),
-          ^"%#{String.replace(search_term, "%", "\\%")}%"
-        )
-      )
-    end
-  end
-
-  def handle_like(queryable, field, search_term, :not_where) do
-    queryable
-    |> where(
-      [..., b],
-      not like(field(b, ^field), ^"%#{String.replace(search_term, "%", "\\%")}%")
-    )
+  def handle_like(queryable, field, search_term, :not_where) when is_binary(search_term) do
+    condition = all_words_condition(&like_word_condition/2, field, search_term)
+    where(queryable, ^dynamic(not (^condition)))
   end
 
   @doc """
@@ -431,122 +377,15 @@ defmodule Rummage.Ecto.Services.BuildSearchQuery do
   """
   @spec handle_ilike(Ecto.Query.t(), atom(), String.t(), __MODULE__.search_expr()) ::
           Ecto.Query.t()
+  def handle_ilike(queryable, field, search_term, :where) when is_binary(search_term),
+    do: where(queryable, ^all_words_condition(&ilike_word_condition/2, field, search_term))
 
-  for fragment <- @supported_fragments_one do
-    def handle_ilike(queryable, {:fragment, unquote(fragment), field}, search_term, :where) do
-      queryable
-      |> where(
-        [..., b],
-        ilike(
-          fragment(unquote(fragment), field(b, ^field)),
-          ^"%#{String.replace(search_term, "%", "\\%")}%"
-        )
-      )
-    end
-  end
+  def handle_ilike(queryable, field, search_term, :or_where) when is_binary(search_term),
+    do: or_where(queryable, ^all_words_condition(&ilike_word_condition/2, field, search_term))
 
-  for fragment <- @supported_fragments_two do
-    def handle_ilike(
-          queryable,
-          {:fragment, unquote(fragment), field1, field2},
-          search_term,
-          :where
-        ) do
-      queryable
-      |> where(
-        [..., b],
-        ilike(
-          fragment(unquote(fragment), field(b, ^field1), field(b, ^field2)),
-          ^"%#{String.replace(search_term, "%", "\\%")}%"
-        )
-      )
-    end
-  end
-
-  def handle_ilike(queryable, field, search_term, :where) when is_binary(search_term) do
-    queryable
-    |> where(
-      [..., b],
-      ilike(field(b, ^field), ^"%#{String.replace(search_term, "%", "\\%")}%")
-    )
-  end
-
-  for fragment <- @supported_fragments_one do
-    def handle_ilike(queryable, {:fragment, unquote(fragment), field}, search_term, :or_where) do
-      queryable
-      |> or_where(
-        [..., b],
-        ilike(
-          fragment(unquote(fragment), field(b, ^field)),
-          ^"%#{String.replace(search_term, "%", "\\%")}%"
-        )
-      )
-    end
-  end
-
-  for fragment <- @supported_fragments_two do
-    def handle_ilike(
-          queryable,
-          {:fragment, unquote(fragment), field1, field2},
-          search_term,
-          :or_where
-        ) do
-      queryable
-      |> or_where(
-        [..., b],
-        ilike(
-          fragment(unquote(fragment), field(b, ^field1), field(b, ^field2)),
-          ^"%#{String.replace(search_term, "%", "\\%")}%"
-        )
-      )
-    end
-  end
-
-  def handle_ilike(queryable, field, search_term, :or_where) do
-    queryable
-    |> or_where(
-      [..., b],
-      ilike(field(b, ^field), ^"%#{String.replace(search_term, "%", "\\%")}%")
-    )
-  end
-
-  for fragment <- @supported_fragments_one do
-    def handle_ilike(queryable, {:fragment, unquote(fragment), field}, search_term, :not_where) do
-      queryable
-      |> where(
-        [..., b],
-        not ilike(
-          fragment(unquote(fragment), field(b, ^field)),
-          ^"%#{String.replace(search_term, "%", "\\%")}%"
-        )
-      )
-    end
-  end
-
-  for fragment <- @supported_fragments_two do
-    def handle_ilike(
-          queryable,
-          {:fragment, unquote(fragment), field1, field2},
-          search_term,
-          :not_where
-        ) do
-      queryable
-      |> where(
-        [..., b],
-        not ilike(
-          fragment(unquote(fragment), field(b, ^field1), field(b, ^field2)),
-          ^"%#{String.replace(search_term, "%", "\\%")}%"
-        )
-      )
-    end
-  end
-
-  def handle_ilike(queryable, field, search_term, :not_where) do
-    queryable
-    |> where(
-      [..., b],
-      not ilike(field(b, ^field), ^"%#{String.replace(search_term, "%", "\\%")}%")
-    )
+  def handle_ilike(queryable, field, search_term, :not_where) when is_binary(search_term) do
+    condition = all_words_condition(&ilike_word_condition/2, field, search_term)
+    where(queryable, ^dynamic(not (^condition)))
   end
 
   def handle_ilike(_queryable, _field, _search_term, _),
