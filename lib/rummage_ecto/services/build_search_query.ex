@@ -306,10 +306,10 @@ defmodule Rummage.Ecto.Services.BuildSearchQuery do
   @doc false
   # The search term split on whitespace into one `%word%` pattern per word, with `\`, `%` and `_`
   # escaped so they match literally. A term with no words (empty or only whitespace)
-  # keeps the single pattern it always had.
+  # matches everything, as the empty term always did.
   def word_patterns(search_term) when is_binary(search_term) do
     case String.split(search_term) do
-      [] -> ["%" <> escape_like(search_term) <> "%"]
+      [] -> ["%"]
       words -> Enum.map(words, &("%" <> escape_like(&1) <> "%"))
     end
   end
